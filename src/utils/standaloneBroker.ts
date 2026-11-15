@@ -288,6 +288,7 @@ class StandaloneBrokerEngine {
 
     window.setInterval(() => this.tickOtcAndMarketFallback(), 400);
     window.setInterval(() => this.settlementLoop(), 100);
+    window.setInterval(() => this.fetchLiveFxSpots(), 300_000);
   }
 
   public subscribe(listener: EventListener): () => void {

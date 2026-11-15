@@ -40,7 +40,13 @@ import type {
   UserProfile,
 } from './types/trading.ts';
 import { soundEngine } from './utils/sound.ts';
-import { brokerFetch, isStandaloneMode } from './utils/brokerApi.ts';
+import {
+  brokerFetch,
+  isStandaloneMode,
+  probeBackendServer,
+  resolveWsUrl,
+  type BackendMode,
+} from './utils/brokerApi.ts';
 import { standaloneBroker } from './utils/standaloneBroker.ts';
 import { AssetIcon } from './components/AssetIcon.tsx';
 import { TradingChart } from './components/TradingChart.tsx';
@@ -86,9 +92,8 @@ interface ToastAlert {
 export default function App() {
   const [clientId, setClientId] = useState<string>(() => getClientId());
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('binarx_auth_token'));
-  const [standaloneActive, setStandaloneActive] = useState<boolean>(() =>
-    typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')
-  );
+  const [backendMode, setBackendMode] = useState<BackendMode>('probing');
+  const standaloneActive = backendMode === 'standalone';
   const [assets, setAssets] = useState<AssetDefinition[]>(ASSETS);
   const [quotes, setQuotes] = useState<Record<string, MarketQuote>>({});
   const [paymentConfig, setPaymentConfig] = useState<CryptoPaymentMethodConfig[]>([]);
@@ -239,6 +244,17 @@ export default function App() {
   selectedSymbolRef.current = selectedSymbol;
   timeframeRef.current = timeframe;
 
+  // 0. Automatically detect remote/same-origin Node server vs static host (Vercel/GitHub Pages)
+  useEffect(() => {
+    let active = true;
+    probeBackendServer().then((mode) => {
+      if (active) setBackendMode(mode);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // 1. Initial bootstrap (restores logged-in session if authToken exists)
   useEffect(() => {
     const tokenQuery = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
@@ -251,7 +267,7 @@ export default function App() {
       headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
     })
       .then(({ ok, data }) => {
-        if (isStandaloneMode()) setStandaloneActive(true);
+        if (isStandaloneMode()) setBackendMode('standalone');
         if (!ok || !data) return;
         if (data.assets?.length) setAssets(data.assets);
         if (data.quotes?.length) {
@@ -382,9 +398,10 @@ export default function App() {
     [pushToast]
   );
 
-  // 2. Real-time WebSocket stream (auto-switches to standalone engine on static GitHub Pages)
+  // 2. Real-time WebSocket stream (auto-connects to Node server or switches cleanly to standalone engine on Vercel/GitHub Pages)
   useEffect(() => {
-    if (standaloneActive || isStandaloneMode()) {
+    if (backendMode === 'probing') return;
+    if (backendMode === 'standalone' || isStandaloneMode()) {
       return standaloneBroker.subscribe(handleBrokerMessage);
     }
 
@@ -395,8 +412,7 @@ export default function App() {
 
     const connect = () => {
       if (unmounted) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}/ws?clientId=${encodeURIComponent(clientId)}`);
+      ws = new WebSocket(resolveWsUrl(clientId));
 
       ws.onopen = () => {
         failedAttempts = 0;
@@ -414,7 +430,7 @@ export default function App() {
         if (unmounted) return;
         failedAttempts += 1;
         if (isStandaloneMode() || failedAttempts >= 2) {
-          setStandaloneActive(true);
+          setBackendMode('standalone');
           return;
         }
         reconnectTimer = setTimeout(connect, 2000);
@@ -427,7 +443,7 @@ export default function App() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       ws?.close();
     };
-  }, [clientId, standaloneActive, handleBrokerMessage]);
+  }, [clientId, backendMode, handleBrokerMessage]);
 
   // 3. Fetch real historical candles on symbol / timeframe change
   useEffect(() => {

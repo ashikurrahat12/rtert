@@ -1324,6 +1324,15 @@ async function fetchRealCandles(symbol: string, tf: Timeframe): Promise<Candle[]
 
 async function startServer() {
   const app = express();
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Auth-Token');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
   app.use(express.json());
 
   const server = http.createServer(app);
@@ -1379,6 +1388,11 @@ async function startServer() {
     }
     return acc;
   }
+
+  // Health check endpoint (used for automatic remote vs standalone backend detection)
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, service: 'binarx-trade', time: Date.now() });
+  });
 
   // Bootstrap endpoint (supports ?token=... for restoring authenticated session)
   app.get('/api/bootstrap', (req, res) => {
